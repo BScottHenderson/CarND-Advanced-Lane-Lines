@@ -10,8 +10,6 @@ import os
 import glob
 
 import numpy as np
-import matplotlib.pyplot as plt
-
 import cv2
 
 
@@ -34,6 +32,15 @@ LANE_LINES_NWINDOWS = 9
 LANE_LINES_MARGIN = 100
 # Minimum number of pixels found to recenter lane lines window.
 LANE_LINES_MINPIX = 50
+
+
+#
+# Constants
+#
+
+# Define conversions in x and y from pixels space to meters
+YM_PER_PIX = 30 / 720  # meters per pixel in y dimension
+XM_PER_PIX = 3.7 / 700  # meters per pixel in x dimension
 
 
 #
@@ -293,6 +300,11 @@ def find_lane_pixels(img):
     """
     Find lane line pixels in a birds-eye image based on histogram data.
 
+    Note that the input image must be grayscale since we're using np.sum()
+    to generate the histogram and are then using the histogram frequency
+    data as pixel positions. If we have color data the sum could end up
+    outside the pixel range (size) of the image.
+
     Args:
         img: lane line image - must be grayscale!
 
@@ -385,12 +397,15 @@ def fit_lane_line_polynomial(img):
         img: image containing lane line pixels
 
     Returns:
-        copy of the input image with lane lines drawn
+        left_fit, right_fit: polynomial coefficients for left and right
+                             lane lines in pixels
+        left_fit_m, right_fit_m: polynomial coefficients for left and right
+                                 lane lines in meters
+        out_img: copy of the input image with lane lines drawn
     """
 
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
     # Find lane line pixels.
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     leftx, lefty, rightx, righty, out_img = find_lane_pixels(gray)
 
     # Fit a second order polynomial to each lane line.
@@ -401,24 +416,55 @@ def fit_lane_line_polynomial(img):
     """
     left_fit = np.polyfit(lefty, leftx, 2)
     right_fit = np.polyfit(righty, rightx, 2)
+    left_fit_m = np.polyfit(lefty * YM_PER_PIX, leftx * XM_PER_PIX, 2)
+    right_fit_m = np.polyfit(righty * YM_PER_PIX, rightx * XM_PER_PIX, 2)
 
     # Generate x and y values for plotting.
     ploty = np.linspace(0, img.shape[0] - 1, img.shape[0])
     left_fitx = left_fit[0] * ploty**2 + left_fit[1] * ploty + left_fit[2]
     right_fitx = right_fit[0] * ploty**2 + right_fit[1] * ploty + right_fit[2]
 
-    # Colors in the left and right lane regions
-    out_img[lefty, leftx] = [255, 0, 0]
-    out_img[righty, rightx] = [0, 0, 255]
+    # Set the color for the left and right lane regions.
+    out_img[lefty, leftx] = [255, 0, 0]  # blue
+    out_img[righty, rightx] = [0, 0, 255]  # red
 
-    # Plot the left and right polynomials on the lane lines image.
+    # Plot the left and right curves on the lane lines image.
     lane_color = (0, 255, 255)
     points = [p for p in zip(left_fitx, ploty)]
     out_img = draw_lines(out_img, points, color=lane_color, closed=False)
     points = [p for p in zip(right_fitx, ploty)]
     out_img = draw_lines(out_img, points, color=lane_color, closed=False)
 
-    return out_img
+    return left_fit, right_fit, left_fit_m, right_fit_m, out_img
+
+
+#
+# Lane Line Curvature
+#
+
+def measure_curvature(img, left_fit, right_fit):
+    """
+    Calculates the curvature of lane line polynomial functions in meters.
+
+    Args:
+        img: lane line image
+        left_fit, right_fit: quadratic polynomial coefficients in meters
+
+    Returns:
+        radius of curvature for left and right lane lines
+    """
+
+    # Define y-value where we want radius of curvature.
+    # Use the maximum y-value, corresponding to the bottom of the image.
+    ploty = np.linspace(0, img.shape[0] - 1, img.shape[0])
+    y_eval = np.max(ploty)
+
+    # Implement the calculation of R_curve (radius of curvature)
+    y_eval *= YM_PER_PIX  # convert y value from pixels to meters
+    left_curverad = np.power((1 + np.square(2 * left_fit[0] * y_eval + left_fit[1])), 1.5) / np.abs(2 * left_fit[0])
+    right_curverad = np.power((1 + np.square(2 * right_fit[0] * y_eval + right_fit[1])), 1.5) / np.abs(2 * right_fit[0])
+
+    return left_curverad, right_curverad
 
 
 #
@@ -450,29 +496,6 @@ class LaneLine():
         self.allx = None
         # y values for detected line pixels
         self.ally = None
-
-
-def DrawLaneLine(warped, left_fitx, right_fitx, ploty):
-    """
-    Draw left and right lane lines on the warped image "warped."
-    """
-    # Create an image to draw the lines on
-    warp_zero = np.zeros_like(warped).astype(np.uint8)
-    color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
-
-    # Recast the x and y points into usable format for cv2.fillPoly()
-    pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
-    pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
-    pts = np.hstack((pts_left, pts_right))
-
-    # Draw the lane onto the warped blank image
-    cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
-
-    # Warp the blank back to original image space using inverse perspective matrix (Minv)
-    newwarp = cv2.warpPerspective(color_warp, Minv, (image.shape[1], image.shape[0]))
-    # Combine the result with the original image
-    result = cv2.addWeighted(undist, 1, newwarp, 0.3, 0)
-    plt.imshow(result)
 
 
 #
@@ -518,11 +541,55 @@ def draw_lines(img, pts, color=(0, 0, 255), thick=2, closed=True):
         else:
             pt1 = pt2
             pt2 = p
+#            print('{} - {}'.format(pt1, pt2))
             cv2.line(img, pt1, pt2, color, thick)
     if closed:
         cv2.line(img, pt2, first, color, thick)
 
     return img
+
+
+def DrawLaneLine(img, img_size, warped, Minv, left_fit, right_fit):
+    """
+    Draw left and right lane lines on the given warped image.
+
+    Args:
+        img: Original image
+        img_size: Original image size
+        warped: Warped perspective version of origial image
+        Minv: Inverse perspective transformation matrix
+        left_fit, right_fit: quadratic coefficients for lane lines
+
+    Returns:
+        a copy of the input image with the lane filled in
+    """
+
+    # Create an image to draw the lines on.
+    warp_zero = np.zeros_like(warped).astype(np.uint8)
+    # Our input image is already color so this step is not necessary.
+#    color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
+
+    # Calculate points for each lane line using quadratic equation.
+    ploty = np.linspace(0, warped.shape[0] - 1, warped.shape[0])
+    left_fitx = left_fit[0] * ploty**2 + left_fit[1] * ploty + left_fit[2]
+    right_fitx = right_fit[0] * ploty**2 + right_fit[1] * ploty + right_fit[2]
+
+    # Recast the x and y points into usable format for cv2.fillPoly()
+    pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
+    pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
+    pts = np.hstack((pts_left, pts_right))
+
+    # Draw the lane onto the warped blank image.
+    cv2.fillPoly(warp_zero, np.int_([pts]), (0, 255, 0))
+
+    # Warp the blank back to original image space using inverse perspective
+    # transformation matrix (Minv).
+    unwarp = cv2.warpPerspective(warp_zero, Minv, img_size, flags=cv2.INTER_LINEAR)
+
+    # Combine the lane line image with the original image.
+    result = cv2.addWeighted(img, 1, unwarp, 0.3, 0)
+
+    return result
 
 
 #
@@ -578,9 +645,9 @@ def main(name):
 
         # Color/gradient threshold
         thresh = color_gradient_threshold(img,
-                                          s_thresh=(170, 255),
-                                          sx_thresh=(20, 100))
-        cv2.imwrite(os.path.join(output_dir, name + '_2_threshold') + ext, img)
+                                          s_thresh=(170, 250),
+                                          sx_thresh=(65, 100))
+        cv2.imwrite(os.path.join(output_dir, name + '_2_threshold') + ext, thresh)
 
         # Perspective transformation
         if M is None or UNDISTORT_REFINE_CAMERA_MATRIX:
@@ -598,8 +665,15 @@ def main(name):
             cv2.imwrite(os.path.join(output_dir, name + '_3_warped2') + ext, img3)
 
         # Detect lane lines
-        lane_lines = fit_lane_line_polynomial(warped)
-        cv2.imwrite(os.path.join(output_dir, name + '_r_lane_lines') + ext, lane_lines)
+        left_fit, right_fit, left_fit_m, right_fit_m, lane_lines = fit_lane_line_polynomial(warped)
+        cv2.imwrite(os.path.join(output_dir, name + '_4_lane_lines') + ext, lane_lines)
+
+        # Calculate lane line curvature.
+        left_curverad_m, right_curverad_m = measure_curvature(warped, left_fit_m, right_fit_m)
+
+        # Draw filled lane polygon.
+        filled_lane = DrawLaneLine(img, img_size, warped, Minv, left_fit, right_fit)
+        cv2.imwrite(os.path.join(output_dir, name + '_5_filled_lane') + ext, filled_lane)
 
 
 if __name__ == '__main__':
