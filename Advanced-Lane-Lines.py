@@ -17,14 +17,20 @@ import cv2
 # Option Flags
 #
 
-PRINT_CAMERA_CALIBRATION_ERROR = True
 UNDISTORT_REFINE_CAMERA_MATRIX = False  # this is not working
-DRAW_WARP_LINES = True
+
+PROCESS_TEST_IMAGES = False
+
+PROGRESS_SIZE = 60
 
 
 #
 # Hyperparameters
 #
+
+# Color and gradient thresholds.
+COLOR_THRESHOLD = (170, 250)
+GRADIENT_THRESHOLD = (65, 100)
 
 # Number of sliding windows used to find lane lines.
 LANE_LINES_NWINDOWS = 9
@@ -32,6 +38,8 @@ LANE_LINES_NWINDOWS = 9
 LANE_LINES_MARGIN = 100
 # Minimum number of pixels found to recenter lane lines window.
 LANE_LINES_MINPIX = 50
+
+FRAME_HISTORY_COUNT = 9
 
 
 #
@@ -41,6 +49,83 @@ LANE_LINES_MINPIX = 50
 # Define conversions in x and y from pixels space to meters
 YM_PER_PIX = 30 / 720  # meters per pixel in y dimension
 XM_PER_PIX = 3.7 / 700  # meters per pixel in x dimension
+
+# Image text parameters
+TEXT_FONT = cv2.FONT_HERSHEY_SIMPLEX
+TEXT_SCALE = 1
+TEXT_COLOR = (255, 255, 255)
+TEXT_THICKNESS = 2
+TEXT_LINE_TYPE = cv2.LINE_AA
+
+
+#
+# LaneLine class
+#
+
+class LaneLine():
+    """
+    Define a class to receive the characteristics of each line detection
+    """
+    def __init__(self):
+        # was the line detected in the last iteration?
+        self.detected = False
+        # x values of the last n fits of the line
+        self.recent_xfitted = []
+        # average x values of the fitted line over the last n iterations
+        self.bestx = None
+        # polynomial coefficients averaged over the last n iterations
+        self.best_fit = None
+        # polynomial coefficients for the most recent fit
+        self.current_fit = [np.array([False])]
+        # radius of curvature of the line in some units
+        self.radius_of_curvature = None
+        # distance in meters of vehicle center from the line
+        self.line_base_pos = None
+        # difference in fit coefficients between last and new fits
+        self.diffs = np.array([0, 0, 0], dtype='float')
+        # x values for detected line pixels
+        self.allx = None
+        # y values for detected line pixels
+        self.ally = None
+
+    def AddFrame(self, img, lane_x, lane_y):
+        # Fit a second order polynomial to each lane line.
+        """
+            You're fitting for f(y), rather than f(x), because the lane lines
+            in the warped image are near vertical and may have the same x value
+            for more than one y value.
+        """
+        fit = np.polyfit(lane_y, lane_x, 2)
+        fit_m = np.polyfit(lane_y * YM_PER_PIX, lane_x * XM_PER_PIX, 2)
+
+        # Generate x and y values for fitting.
+        fity = np.linspace(0, img.shape[0] - 1, img.shape[0])
+        fitx = fit[0] * fity**2 + fit[1] * fity + fit[2]
+
+        # Define y-value where we want radius of curvature.
+        # Use the maximum y-value, corresponding to the bottom of the image.
+        y_eval = np.max(fity)
+
+        # Implement the calculation of R_curve (radius of curvature)
+        y_eval *= YM_PER_PIX  # convert y value from pixels to meters
+        self.radius_of_curvature = np.power((1 + np.square(2 * fit_m[0] * y_eval + fit_m[1])), 1.5) / np.abs(2 * fit_m[0])
+
+        # Calculate offset from image center.
+        x = fit_m[0] * y_eval**2 + fit_m[1] * y_eval + fit_m[2]
+        img_center = (img.shape[1] / 2.) * XM_PER_PIX
+        self.line_base_pos = img_center - x
+
+        self.allx = fitx
+        self.ally = fity
+
+        self.current_fit.append(fit)
+        # Keep only the most recent N frames.
+        if len(self.current_fit) > FRAME_HISTORY_COUNT:
+            self.current_fit = self.current_fit[len(self.current_fit) - FRAME_HISTORY_COUNT:]
+
+        self.best_fit = np.average(self.current_fit, axis=0)
+
+        self.diffs = abs(fit - self.best_fit)
 
 
 #
@@ -143,14 +228,14 @@ def calibrate_camera(image_dir):
     rvecs and tvecs give the position of the camera in the real World
     """
 
-    if PRINT_CAMERA_CALIBRATION_ERROR:
-        total_error = 0
-        for i in range(len(objpoints)):
-            imgpoints2, _  = cv2.projectPoints(objpoints[i], rvecs[i], tvecs[i], mtx, dist)
-            error = cv2.norm(imgpoints[i], imgpoints2, cv2.NORM_L2) / len(imgpoints2)
-            total_error += error
-        total_error /= len(objpoints)
-        print('\nTotal camera calibration error: {}\n'.format(total_error))
+    # Print camera calibration error.
+    total_error = 0
+    for i in range(len(objpoints)):
+        imgpoints2, _  = cv2.projectPoints(objpoints[i], rvecs[i], tvecs[i], mtx, dist)
+        error = cv2.norm(imgpoints[i], imgpoints2, cv2.NORM_L2) / len(imgpoints2)
+        total_error += error
+    total_error /= len(objpoints)
+    print('\nTotal camera calibration error: {}\n'.format(total_error))
 
     return mtx, dist
 
@@ -468,37 +553,6 @@ def measure_curvature(img, left_fit, right_fit):
 
 
 #
-# LaneLine class
-#
-
-class LaneLine():
-    """
-    Define a class to receive the characteristics of each line detection
-    """
-    def __init__(self):
-        # was the line detected in the last iteration?
-        self.detected = False
-        # x values of the last n fits of the line
-        self.recent_xfitted = []
-        # average x values of the fitted line over the last n iterations
-        self.bestx = None
-        # polynomial coefficients averaged over the last n iterations
-        self.best_fit = None
-        # polynomial coefficients for the most recent fit
-        self.current_fit = [np.array([False])]
-        # radius of curvature of the line in some units
-        self.radius_of_curvature = None
-        # distance in meters of vehicle center from the line
-        self.line_base_pos = None
-        # difference in fit coefficients between last and new fits
-        self.diffs = np.array([0, 0, 0], dtype='float')
-        # x values for detected line pixels
-        self.allx = None
-        # y values for detected line pixels
-        self.ally = None
-
-
-#
 # Draw lines
 #
 
@@ -593,42 +647,25 @@ def DrawLaneLine(img, img_size, warped, Minv, left_fit, right_fit):
 
 
 #
-# Main
+# Process Test Images
 #
 
-def main(name):
-
-    print('Name: {}'.format(name))
-
+def process_test_images(image_dir, output_dir, C, D):
     """
-    1. Camera calibration
-    2. Distortion correction
-    3. Color/gradient threshold
-    4. Perspective transform
-    5. Detect lane lines
-    6. Determine the lane curvature
+    Process images in the test directory and create output images showing
+    the results of various stages of the image processing pipeline.
+
+    Args:
+        image_dir: read test images from this directory
+        output_dir: write modified images to this directory
+        C: camera calibration matrix
+        D: camera distortion coefficients
+
+    Returns:
+        nothing
     """
-
-    #
-    # Camera Calibration
-    #
-
-    # Get the camera matrix (C) and distortion coefficients (D) from
-    # the camera calibration images.
-    C, D = calibrate_camera('./camera_cal')
-
-    #
-    # Perspective Transform Matrix
-    #
-
     M, Minv = None, None  # Calculated below after reading first image.
 
-    #
-    # For each image ...
-    #
-
-    image_dir = './test_images'
-    output_dir = './output_images'
     images = glob.glob(os.path.join(image_dir, '*.jpg'))
     for fname in images:
         print('Processing image {}'.format(fname))
@@ -645,8 +682,8 @@ def main(name):
 
         # Color/gradient threshold
         thresh = color_gradient_threshold(img,
-                                          s_thresh=(170, 250),
-                                          sx_thresh=(65, 100))
+                                          s_thresh=COLOR_THRESHOLD,
+                                          sx_thresh=GRADIENT_THRESHOLD)
         cv2.imwrite(os.path.join(output_dir, name + '_2_threshold') + ext, thresh)
 
         # Perspective transformation
@@ -655,25 +692,202 @@ def main(name):
         warped = cv2.warpPerspective(thresh, M, img_size, flags=cv2.INTER_LINEAR)
         cv2.imwrite(os.path.join(output_dir, name + '_3_warped') + ext, warped)
 
-        if DRAW_WARP_LINES:
-            # Draw lines on undistorted original image (not color threshold output).
-            img2 = draw_lines(img, src)
-            cv2.imwrite(os.path.join(output_dir, name + '_3_warped1') + ext, img2)
-            # Warp the original image (not the color threshold output) and draw lines.
-            img3 = cv2.warpPerspective(img, M, img_size, flags=cv2.INTER_LINEAR)
-            img3 = draw_lines(img3, dst)
-            cv2.imwrite(os.path.join(output_dir, name + '_3_warped2') + ext, img3)
+        # Draw lines on undistorted original image (not color threshold output).
+        img2 = draw_lines(img, src)
+        cv2.imwrite(os.path.join(output_dir, name + '_3_warped1') + ext, img2)
+
+        # Warp the original image (not the color threshold output) and draw lines.
+        img3 = cv2.warpPerspective(img, M, img_size, flags=cv2.INTER_LINEAR)
+        img3 = draw_lines(img3, dst)
+        cv2.imwrite(os.path.join(output_dir, name + '_3_warped2') + ext, img3)
 
         # Detect lane lines
         left_fit, right_fit, left_fit_m, right_fit_m, lane_lines = fit_lane_line_polynomial(warped)
         cv2.imwrite(os.path.join(output_dir, name + '_4_lane_lines') + ext, lane_lines)
 
-        # Calculate lane line curvature.
+        # Calculate lane line curvature and write to image.
         left_curverad_m, right_curverad_m = measure_curvature(warped, left_fit_m, right_fit_m)
+        curve_radius = 'Radius: ({} m, {} m)'.format(round(left_curverad_m, 1), round(right_curverad_m, 1))
+        cv2.putText(img, curve_radius, (10, 30),
+                    TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
+
+        # Calculate offset from lane center and write to image.
+        y = (img.shape[0] - 1) * YM_PER_PIX
+        left_x = left_fit_m[0] * y**2 + left_fit_m[1] * y + left_fit_m[2]
+        right_x = right_fit_m[0] * y**2 + right_fit_m[1] * y + right_fit_m[2]
+        lane_center = (left_x + right_x) / 2.
+        img_center = (img.shape[1] / 2.) * XM_PER_PIX
+        offset = 'Offset: {} m'.format(round(img_center - lane_center, 1))
+        cv2.putText(img, offset, (10, 60),
+                    TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
 
         # Draw filled lane polygon.
         filled_lane = DrawLaneLine(img, img_size, warped, Minv, left_fit, right_fit)
         cv2.imwrite(os.path.join(output_dir, name + '_5_filled_lane') + ext, filled_lane)
+
+
+#
+# Main
+#
+
+def main(name):
+
+    print('Name: {}'.format(name))
+    print()
+
+    """
+    1. Camera calibration
+    2. Distortion correction
+    3. Color/gradient threshold
+    4. Perspective transform
+    5. Detect lane lines
+    6. Determine the lane curvature
+    """
+
+    #
+    # Camera Calibration
+    #
+
+    # Get the camera matrix (C) and distortion coefficients (D) from
+    # the camera calibration images.
+    print('Camera calibration ...')
+    C, D = calibrate_camera('./camera_cal')
+
+    #
+    # Perspective Transform Matrix
+    #
+
+    M, Minv = None, None  # Calculated below after reading first image.
+
+    #
+    # For each image ...
+    #
+
+    left = LaneLine()
+    right = LaneLine()
+
+    video_file = './project_video.mp4'
+    output_file = './project_video_lanes.mp4'
+    video_dir = './project_video_lanes'
+    vidcap = cv2.VideoCapture(video_file)
+    vidwriter = None
+    if not vidcap.isOpened():
+        print('Unable to open video file {}'.format(video_file))
+    else:
+        print('Opened video file {}'.format(video_file))
+        fourcc = int(vidcap.get(cv2.CAP_PROP_FOURCC))
+        fps = vidcap.get(cv2.CAP_PROP_FPS)
+        frame_width = int(vidcap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_height = int(vidcap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print('FOURCC={}'.format(fourcc))
+        print('FPS={}'.format(fps))
+        print('frame=({}, {})'.format(frame_width, frame_height))
+        frame_count = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
+        print('frame count={}'.format(frame_count))
+        vidwriter = cv2.VideoWriter(output_file, fourcc, fps,
+                                    (frame_width, frame_height))
+
+    progress_step = (frame_count // PROGRESS_SIZE) + 1
+    sys.stdout.write('[{}]'.format(' ' * PROGRESS_SIZE))
+    sys.stdout.write('\b' * (PROGRESS_SIZE + 1)) # return to start of line, after '['
+    sys.stdout.flush()
+
+    current_frame = 0
+    while vidcap.isOpened():
+        # Read a frame from the video file.
+        ret, img = vidcap.read()
+        if ret:
+            current_frame += 1
+
+            #
+            # Find lane lines
+            #
+
+            img_size = (img.shape[1], img.shape[0])
+
+            # Distortion correction
+            img = undistort(img, C, D)
+
+            # Color/gradient threshold
+            thresh = color_gradient_threshold(img,
+                                              s_thresh=COLOR_THRESHOLD,
+                                              sx_thresh=GRADIENT_THRESHOLD)
+
+            # Perspective transformation
+            if M is None or UNDISTORT_REFINE_CAMERA_MATRIX:
+                M, Minv, src, dst = perspective_transform_matrix(img_size)
+            warped = cv2.warpPerspective(thresh, M, img_size, flags=cv2.INTER_LINEAR)
+
+#            # Detect lane lines
+#            left_fit, right_fit, left_fit_m, right_fit_m, lane_lines = fit_lane_line_polynomial(warped)
+#
+#            # Calculate lane line curvature.
+#            left_curverad_m, right_curverad_m = measure_curvature(warped, left_fit_m, right_fit_m)
+#
+#            # Draw filled lane polygon.
+#            filled_lane = DrawLaneLine(img, img_size, warped, Minv, left_fit, right_fit)
+#
+#            # Write the modified video frame to the output file.
+#            vidwriter.write(filled_lane)
+#
+#            # For whatever reason I was not able to get VideoWriter to work.
+#            # It produces a file but the file remains empty.
+#            # So I will write each frame out to a separate file and then use
+#            # the video.py script from the Behavioral Cloning project to create
+#            # the video file as a separate step.
+#            cv2.imwrite(os.path.join(video_dir, 'frame{:03d}.jpg'.format(frame_count)), filled_lane)
+
+            #
+            # Update LaneLine objects
+            #
+
+            # Find lane line pixels.
+            gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
+            leftx, lefty, rightx, righty, _ = find_lane_pixels(gray)
+
+            left.AddFrame(warped, leftx, lefty)
+            right.AddFrame(warped, rightx, righty)
+
+            filled_lane = DrawLaneLine(img, img_size, warped, Minv, left.best_fit, right.best_fit)
+
+            # Write left/right lane line curavture radii to image.
+            curve_radius = 'Radius: ({} m, {} m)'.format(round(left.radius_of_curvature, 1), round(right.radius_of_curvature, 1))
+            cv2.putText(filled_lane, curve_radius, (10, 30),
+                        TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
+
+            # Calculate average offset from lane center and write to image.
+            lane_center = (left.line_base_pos + right.line_base_pos) / 2.
+            offset = 'Offset: {} m'.format(round(lane_center, 1))
+            cv2.putText(filled_lane, offset, (10, 60),
+                        TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
+
+            # Write the frame number to the image.
+            frame = 'Frame: {}'.format(current_frame)
+            cv2.putText(filled_lane, frame, (1050, 30),
+                        TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
+
+            # For whatever reason I was not able to get VideoWriter to work.
+            # It produces a file but the file remains empty.
+            # So I will write each frame out to a separate file and then use
+            # the video.py script from the Behavioral Cloning project to create
+            # the video file as a separate step.
+            cv2.imwrite(os.path.join(video_dir, 'frame{:06d}.jpg'.format(current_frame)), filled_lane)
+
+            # Update the progress bar.
+            if current_frame % progress_step == 0:
+                sys.stdout.write('-')
+                sys.stdout.flush()
+        else:
+            break
+
+    # Cleanup.
+    vidcap.release()
+    vidwriter.release()
+    sys.stdout.write('\n')
+    print('Read {} frames from video file {}'.format(current_frame, video_file))
+
+    if PROCESS_TEST_IMAGES:
+        process_test_images('./test_images', './output_images', C, D)
 
 
 if __name__ == '__main__':
