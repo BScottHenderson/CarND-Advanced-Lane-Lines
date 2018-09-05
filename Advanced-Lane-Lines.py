@@ -21,7 +21,10 @@ from moviepy.editor import VideoFileClip
 
 UNDISTORT_REFINE_CAMERA_MATRIX = False  # this is not working
 PROCESS_TEST_IMAGES = False
-WRITE_OUTPUT_FRAMES = False
+PROCESS_TEST_FRAMES = False
+PROCESS_VIDEO_FILE = True
+USE_LANE_LINES_CLASS = True
+WRITE_OUTPUT_FRAMES = True
 
 
 #
@@ -77,7 +80,7 @@ class LaneLine():
         # polynomial coefficients averaged over the last n iterations
         self.best_fit = None
         # polynomial coefficients for the most recent fit
-        self.current_fit = [np.array([False])]
+        self.current_fit = []
         # radius of curvature of the line in some units
         self.radius_of_curvature = None
         # distance in meters of vehicle center from the line
@@ -120,7 +123,7 @@ class LaneLine():
         self.ally = fity
 
         self.current_fit.append(fit)
-        # Keep only the most recent N frames.
+        # Keep only the most recent FRAME_HISTORY_COUNT frames.
         if len(self.current_fit) > FRAME_HISTORY_COUNT:
             self.current_fit = self.current_fit[len(self.current_fit) - FRAME_HISTORY_COUNT:]
 
@@ -475,12 +478,14 @@ def find_lane_pixels(img):
     return leftx, lefty, rightx, righty, out_img
 
 
-def fit_lane_line_polynomial(img):
+def fit_lane_line_polynomial(img, color_conversion=cv2.COLOR_BGR2GRAY):
     """
     Find lane lines in an image and fit a quadratic polynomial.
 
     Args:
         img: image containing lane line pixels
+        color_conversion: use cv2.COLOR_BGR2GRAY (default) if reading images
+            with OpenCV else use cv2.COLOR_RGB2GRAY
 
     Returns:
         left_fit, right_fit: polynomial coefficients for left and right
@@ -491,7 +496,7 @@ def fit_lane_line_polynomial(img):
     """
 
     # Find lane line pixels.
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(img, color_conversion)
     leftx, lefty, rightx, righty, out_img = find_lane_pixels(gray)
 
     # Fit a second order polynomial to each lane line.
@@ -614,12 +619,12 @@ class AdvancedLaneLines():
 
     Lane finding steps:
 
-    1. Camera calibration
-    2. Distortion correction
-    3. Color/gradient threshold
-    4. Perspective transform
-    5. Detect lane lines
-    6. Determine the lane curvature
+    1. Camera calibration               __init__
+    2. Distortion correction            FindLaneLines
+    3. Color/gradient threshold         FindLaneLines
+    4. Perspective transform            FindLaneLines
+    5. Detect lane lines                FindLaneLines
+    6. Determine the lane curvature     FindLaneLines
     """
 
     def __init__(self):
@@ -666,13 +671,16 @@ class AdvancedLaneLines():
         to the end of the line below, where start_second and end_second are
         integer values representing the start and end of the subclip.
         """
+        self.video_dir = video_dir
+
         # Open the video file.
-        input_clip = VideoFileClip(input_file)  # .subclip(41, 43)
+        input_clip = VideoFileClip(input_file).subclip(41, 43)
 
         # For each frame in the video clip, replace the frame image with the
         # result of applying the 'FindLaneLines' function.
         # NOTE: this function expects color images!!
-        output_clip = input_clip.fl_image(self.FindLaneLines)
+        self.current_frame = 0
+        output_clip = input_clip.fl(self.FindLaneLines)
 
         # Save the resulting, modified, video clip to a file.
         file_name, ext = os.path.splitext(input_file)
@@ -687,20 +695,22 @@ class AdvancedLaneLines():
         output_clip.audio.reader.close_proc()
         del output_clip
 
-    def FindLaneLines(self, img):
+    def FindLaneLines(self, get_frame, t):
         """
         Given an image (video frame) find lane lines. Draw the lane, along
         with the curvature radius and distance of the car from lane center,
         on a copy of the input image and return the result.
 
         Args:
-            img: input image (video frame)
+            get_frame: Video clip's get_frame method.
+            t: time in seconds
 
         Returns:
             copy of the input image with lane lines drawn
         """
         self.current_frame += 1
 
+        img = get_frame(t)
         img_size = (img.shape[1], img.shape[0])
 
         # Distortion correction
@@ -716,65 +726,65 @@ class AdvancedLaneLines():
             self.M, self.Minv, src, dst = perspective_transform_matrix(img_size)
         warped = cv2.warpPerspective(thresh, self.M, img_size, flags=cv2.INTER_LINEAR)
 
-#        # Detect lane lines
-#        left_fit, right_fit, left_fit_m, right_fit_m, lane_lines = fit_lane_line_polynomial(warped)
-#
-#        # Calculate lane line curvature.
-#        left_curverad_m, right_curverad_m = measure_curvature(warped, left_fit_m, right_fit_m)
-#
-#        # Draw filled lane polygon.
-#        filled_lane = DrawLaneLine(img, img_size, warped, Minv, left_fit, right_fit)
-#
-#        # Write the modified video frame to the output file.
-#        vidwriter.write(filled_lane)
-#
-#        # For whatever reason I was not able to get VideoWriter to work.
-#        # It produces a file but the file remains empty.
-#        # So I will write each frame out to a separate file and then use
-#        # the video.py script from the Behavioral Cloning project to create
-#        # the video file as a separate step.
-#        cv2.imwrite(os.path.join(video_dir, 'frame{:03d}.jpg'.format(frame_count)), filled_lane)
+        if not USE_LANE_LINES_CLASS:
 
-        #
-        # Update LaneLine objects
-        #
+            #
+            # Process each image independently without using the LaneLine class.
+            #
 
-        # Find lane line pixels.
-        gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
-        leftx, lefty, rightx, righty, _ = find_lane_pixels(gray)
+            # Detect lane lines
+            left_fit, right_fit, left_fit_m, right_fit_m, lane_lines = fit_lane_line_polynomial(warped, cv2.COLOR_RGB2GRAY)
 
-        self.left.AddFrame(warped, leftx, lefty)
-        self.right.AddFrame(warped, rightx, righty)
+            # Calculate lane line curvature.
+            left_curverad_m, right_curverad_m = measure_curvature(warped, left_fit_m, right_fit_m)
 
-        filled_lane = self.DrawLaneLine(img, img_size, warped, self.left.best_fit, self.right.best_fit)
+            # Draw filled lane polygon.
+            filled_lane = self.DrawLaneLine(img, img_size, warped, left_fit, right_fit)
 
-        # Write left/right lane line curavture radii to image.
-        curve_radius = 'Radius: ({} m, {} m)'.format(
-                round(self.left.radius_of_curvature, 1),
-                round(self.right.radius_of_curvature, 1))
-        cv2.putText(filled_lane, curve_radius, (10, 30),
-                    TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
+        else:
 
-        # Calculate average offset from lane center and write to image.
-        lane_center = (self.left.line_base_pos + self.right.line_base_pos) / 2.
-        offset = 'Offset: {} m'.format(round(lane_center, 1))
-        cv2.putText(filled_lane, offset, (10, 60),
-                    TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
+            #
+            # Update LaneLine objects
+            #
+
+            # Find lane line pixels.
+            gray = cv2.cvtColor(warped, cv2.COLOR_RGB2GRAY)
+            leftx, lefty, rightx, righty, _ = find_lane_pixels(gray)
+
+            self.left.AddFrame(warped, leftx, lefty)
+            self.right.AddFrame(warped, rightx, righty)
+
+            filled_lane = self.DrawLaneLine(img, img_size, warped, self.left.best_fit, self.right.best_fit)
+
+            # Write left/right lane line curavture radii to image.
+            curve_radius = 'Radius: ({} m, {} m)'.format(
+                    round(self.left.radius_of_curvature, 1),
+                    round(self.right.radius_of_curvature, 1))
+            cv2.putText(filled_lane, curve_radius, (10, 30),
+                        TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
+
+            # Calculate average offset from lane center and write to image.
+            lane_center = (self.left.line_base_pos + self.right.line_base_pos) / 2.
+            offset = 'Offset: {} m'.format(round(lane_center, 1))
+            cv2.putText(filled_lane, offset, (10, 60),
+                        TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
 
         # Write the frame number to the image.
         frame = 'Frame: {}'.format(self.current_frame)
         cv2.putText(filled_lane, frame, (1050, 30),
                     TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
 
-        # For whatever reason I was not able to get VideoWriter to work.
-        # It produces a file but the file remains empty.
-        # So I will write each frame out to a separate file and then use
-        # the video.py script from the Behavioral Cloning project to create
-        # the video file as a separate step.
+        # Write the time (parameter t) to the image.
+        time = 'Time: {}'.format(int(round(t)))
+        cv2.putText(filled_lane, time, (1050, 700),
+                    TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
+
+        # Optionally write the modified image to a file.
         if self.video_dir is not None:
             output_file = os.path.join(self.video_dir,
                                        'frame{:06d}.jpg'.format(self.current_frame))
-            cv2.imwrite(output_file, filled_lane)
+            filled_lane_cv2 = cv2.cvtColor(filled_lane, cv2.COLOR_RGB2BGR)
+            cv2.imwrite(output_file, filled_lane_cv2)
 
         # Return the modified image.
         return filled_lane
@@ -826,8 +836,8 @@ class AdvancedLaneLines():
         the results of various stages of the image processing pipeline.
 
         Args:
-            image_dir: read test images from this directory
-            output_dir: write modified images to this directory
+            image_dir (str): read test images from this directory
+            output_dir (str): write modified images to this directory
 
         Returns:
             nothing
@@ -868,7 +878,7 @@ class AdvancedLaneLines():
             cv2.imwrite(os.path.join(output_dir, name + '_3_warped2') + ext, img3)
 
             # Detect lane lines
-            left_fit, right_fit, left_fit_m, right_fit_m, lane_lines = fit_lane_line_polynomial(warped)
+            left_fit, right_fit, left_fit_m, right_fit_m, lane_lines = fit_lane_line_polynomial(warped, cv2.COLOR_BGR2GRAY)
             cv2.imwrite(os.path.join(output_dir, name + '_4_lane_lines') + ext, lane_lines)
 
             # Calculate lane line curvature and write to image.
@@ -906,8 +916,9 @@ def main(name):
 
     if PROCESS_TEST_IMAGES:
         proc.ProcessTestImages('./test_images', './output_images')
-#    proc.ProcessTestImages('./test_frames', './test_frames')
-    else:
+    if PROCESS_TEST_FRAMES:
+        proc.ProcessTestImages('./test_frames', './test_frames')
+    if PROCESS_VIDEO_FILE:
         video_dir = None
         if WRITE_OUTPUT_FRAMES:
             video_dir = './project_video_lanes'
