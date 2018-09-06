@@ -32,8 +32,8 @@ WRITE_OUTPUT_FRAMES = True
 #
 
 # Color and gradient thresholds.
-COLOR_THRESHOLD = (170, 250) # (170, 250)  # (150, 230)
-GRADIENT_THRESHOLD = (65, 100)      #(65, 130)
+COLOR_THRESHOLD = (180, 230)    # (170, 250) (150, 230)
+GRADIENT_THRESHOLD = (65, 130)  # (65, 100) (65, 130)
 
 # Number of sliding windows used to find lane lines.
 LANE_LINES_NWINDOWS = 9
@@ -301,13 +301,13 @@ def color_gradient_threshold(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
     img = np.copy(img)
 
     # Convert to HLS color space and separate the channels.
-    hls = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)
+    hls = cv2.cvtColor(img, cv2.COLOR_BGR2HLS)
 #    H = hls[:, :, 0]
     L = hls[:, :, 1]
 #    S = hls[:, :, 2]
 
     # Convert to LAB color space and separate the channels.
-    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
 #    L = lab[:, :, 0]
 #    A = lab[:, :, 1]
     B = lab[:, :, 2]
@@ -502,7 +502,7 @@ def fit_lane_line_polynomial(img):
     """
 
     # Find lane line pixels.
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     leftx, lefty, rightx, righty, out_img = find_lane_pixels(gray)
 
     # Fit a second order polynomial to each lane line.
@@ -589,7 +589,7 @@ def draw_lines(img, pts, color=(0, 0, 255), thick=2, closed=True):
     # in practice I could not make this work using either type() or __class__.
     # Also convert to integer - I'm not sure why this is necessary since
     # the image warping source quadrilateral uses floating point coords
-    # and that would draw just fine. Still rounding to the nearest integer
+    # and that would draw just fine. Still, rounding to the nearest integer
     # is close enough for drawing.
     pts = np.copy(pts)
     pts = [tuple([np.int(p[0]), np.int(p[1])]) for p in pts]
@@ -680,7 +680,7 @@ class AdvancedLaneLines():
         self.video_dir = video_dir
 
         # Open the video file.
-        input_clip = VideoFileClip(input_file)  # .subclip(40, 44)
+        input_clip = VideoFileClip(input_file)  # .subclip(40, 45)
 
         # For each frame in the video clip, replace the frame image with the
         # result of applying the 'FindLaneLines' function.
@@ -719,6 +719,10 @@ class AdvancedLaneLines():
         img = get_frame(t)
         img_size = (img.shape[1], img.shape[0])
 
+        # Convert from RGB to BGR since this seems to work best for cv2
+        # functions.
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
         # Distortion correction
         img = undistort(img, self.C, self.D)
 
@@ -754,14 +758,14 @@ class AdvancedLaneLines():
             #
 
             # Find lane line pixels.
-            gray = cv2.cvtColor(warped, cv2.COLOR_RGB2GRAY)
+            gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
             leftx, lefty, rightx, righty, _ = find_lane_pixels(gray)
 
+            # Add the current frame to the left and right lane line objects.
             self.left.AddFrame(warped, leftx, lefty)
             self.right.AddFrame(warped, rightx, righty)
 
-
-
+            # Draw a filled lane.
             filled_lane = self.DrawLaneLine(img, img_size, warped, self.left.best_fit, self.right.best_fit)
 
             # Write left/right lane line curavture radii to image.
@@ -791,8 +795,10 @@ class AdvancedLaneLines():
         if self.video_dir is not None:
             output_file = os.path.join(self.video_dir,
                                        'frame{:06d}.jpg'.format(self.current_frame))
-            filled_lane_cv2 = cv2.cvtColor(filled_lane, cv2.COLOR_RGB2BGR)
-            cv2.imwrite(output_file, filled_lane_cv2)
+            cv2.imwrite(output_file, filled_lane)
+
+        # Convert BGR back to RGB before returning to MoviePy.
+        filled_lane = cv2.cvtColor(filled_lane, cv2.COLOR_BGR2RGB)
 
         # Return the modified image.
         return filled_lane
@@ -859,9 +865,6 @@ class AdvancedLaneLines():
             # Read the image.
             img = cv2.imread(fname)
             img_size = (img.shape[1], img.shape[0])
-
-            # Convert from BGR to RGB now to avoid problems later.
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
             # Distortion correction
             img = undistort(img, self.C, self.D)
