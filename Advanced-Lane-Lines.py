@@ -323,15 +323,13 @@ def color_gradient_threshold(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
     sxbinary[(scaled_sobel >= sx_thresh[0]) &
              (scaled_sobel <= sx_thresh[1])] = 1
 
-# Apply color channel threshold
+    # Apply color channel threshold
     L = L * (255 / np.max(L))  # normalize
     L_thresh = np.zeros_like(L)
-    L_thresh[(L > s_thresh[0]) & (L <= s_thresh[1])] = 1    # 220, 255
-    if np.max(B) > 175:
-        # normalize, but only if there is yellow
-        B = B * (255 / np.max(B))
+    L_thresh[(L > s_thresh[0]) & (L <= s_thresh[1])] = 1
+    B = B * (255 / np.max(B))  # normalize
     B_thresh = np.zeros_like(B)
-    B_thresh[((B > s_thresh[0]) & (B <= s_thresh[1]))] = 1  # 190, 255
+    B_thresh[((B > s_thresh[0]) & (B <= s_thresh[1]))] = 1
     # Combine HLS and Lab B channel thresholds
     lb_binary = np.zeros_like(L_thresh)
     lb_binary[(L_thresh == 1) | (B_thresh == 1)] = 1
