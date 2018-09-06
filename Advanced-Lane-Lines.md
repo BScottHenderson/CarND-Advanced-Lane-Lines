@@ -42,7 +42,7 @@ All code for this project is in the Python script file "./Advanced-Lane-Lines.py
 
 #### 1. Briefly state how you computed the camera matrix and distortion coefficients. Provide an example of a distortion corrected calibration image.
 
-Camera calibration code can be found in the `calibrate_camera()` function on lines 131-240. Using code taken from the OpenCV web site ( https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_calib3d/py_calibration/py_calibration.html) I used the images in the "./camera_cal" folder to construct the camera calibration matrix (C) and distortion coefficients (D).
+Camera calibration code can be found in the `calibrate_camera()` function on lines 129-238. Using code taken from the OpenCV web site ( https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_calib3d/py_calibration/py_calibration.html) I used the images in the "./camera_cal" folder to construct the camera calibration matrix (C) and distortion coefficients (D).
 
 As an initialization step I created an array of "object points" for a single image. These are the (x, y, z) coordinates of chessboard corners in the real world. Assume that the chessboard is on a fixed plane with z=0 for each calibration image. So we can simply copy this initial array for each calibration image.
 
@@ -62,23 +62,23 @@ Original image:
 
 #### 1. Distortion-corrected image.
 
-The first step in processing an image is distortion correction. This is essentially a one-line step that uses the `cv2.undistort()` function to remove camera distortion from the input images. I created a wrapper function called `undistort()`, lines 243-283, that also includes optional camera matrix refinement code I obtained from the OpenCV web site. I was not able to make this code work so the `undistort()` function is really just a call to the `cv2.undistort()` funciton.
+The first step in processing an image is distortion correction. This is essentially a one-line step that uses the `cv2.undistort()` function to remove camera distortion from the input images. I created a wrapper function called `undistort()`, lines 241-281, that also includes optional camera matrix refinement code I obtained from the OpenCV web site. I was not able to make this code work so the `undistort()` function is really just a call to the `cv2.undistort()` funciton.
 
 Undistorted image:
 ![alt text][image2]
 
 #### 2. Threshhold image.
 
-The next step is to apply a combination of color and gradient thresholds to the image. The code for this is in the `color_gradient_threshold()` function, lines 286-328. Before applying thresholds I converted the image from RGB to HLS. For the gradient threshold I used the `cv2.Sobel()` function on the L channel of the image to calculate derivatives on the x axis. The color threshold is a simple test applied to the S channel of the image.
+The next step is to apply a combination of color and gradient thresholds to the image. The code for this is in the `color_gradient_threshold()` function, lines 284-340. After my initial implementation - using just an HLS image - had a problem with the test video when the car is turning to the right and passing under a tree I changed my color threshold implementation. The new implementation uses the L channel from an HLS version of the image and the B channel from a LAB version of the image. The goal was to come up with a way to detect both yellow and white lines. I believe this was part of the problem in the initial implementation in that the yellow lane line on the left was being lost in the shadow of a tree.
 
-I used a combination of color and gradient thresholds to generate a binary image (thresholding steps at lines # through # in `another_file.py`).  Here's an example of my output for this step.  (note: this is not actually from one of the test images)
+As before I am using the `cv2.Sobel()` function on the L channel of the HLS image to calculate derivatives on the x axis. I apply thresholds to both color images and the Sobel image and combine the results to form the new image.
 
 Image after thresholds applied:
 ![alt text][image3]
 
 #### 3. Perspective transformaton.
 
-The next step is to apply a perspective transformation on the image to convert it to bird's-eye view. The code for this is in the `perspective_transform_matrix()` function, lines 331-377. Given source and destination points the `cv2.getPerspectiveTransform()` function is used to calculate the perspective transformation matrix. The source points are four points in the source image that form a quadrilateral that roughly outline the lane. The destination points are the target points for the transformed image.
+The next step is to apply a perspective transformation on the image to convert it to bird's-eye view. The code for this is in the `perspective_transform_matrix()` function, lines 343-389. Given source and destination points the `cv2.getPerspectiveTransform()` function is used to calculate the perspective transformation matrix. The source points are four points in the source image that form a quadrilateral that roughly outline the lane. The destination points are the target points for the transformed image.
 
 Transformed image:
 ![alt text][image4]
@@ -91,7 +91,7 @@ and the destination points on a warped version of that image:
 
 #### 4. Identify lane line pixels and fit with a polynomial
 
-The next step is to find lane line pixels in the warped image. The code for this is in the `find_lane_pixels()` function, lines 380-474. The basic idea is to use a series of windows on a histogram of image pixels to find points with the highest intensity. Since we're looking at histogram data the intensity corresponds to frequency so we get areas of the image with the highest concentration of pixels. The next step is to fit a quadratic polynomial to these lane line points. The code for this is in the `fit_lane_line_polynomial()` function, lines 477-523. This is a simple matter of using the `np.polyfit()` function to fit a polynomial to the lane line pixels found by the `find_lane_pixels()` function.
+The next step is to find lane line pixels in the warped image. The code for this is in the `find_lane_pixels()` function, lines 392-486. The basic idea is to use a series of windows on a histogram of image pixels to find points with the highest intensity. Since we're looking at histogram data the intensity corresponds to frequency so we get areas of the image with the highest concentration of pixels. The next step is to fit a quadratic polynomial to these lane line points. The code for this is in the `fit_lane_line_polynomial()` function, lines 489-535. This is a simple matter of using the `np.polyfit()` function to fit a polynomial to the lane line pixels found by the `find_lane_pixels()` function.
 
 The results of applying this process to the sample image are:
 ![alt text][image7]
@@ -100,9 +100,9 @@ This image indicates left lane pixels in blue and right lane pixels in red. The 
 
 #### 5. Calculate the radius of curvature of the lane and the position of the vehicle with respect to center.
 
-The radius of curvature is calculated using the `measure_curvature()` function, lines 526-552. This function assumes that the coefficients given for the left and right lane polynomials are calculated from coordinates that were converted from pixels to meters. The y value corresponding to the bottom of the image is used - after conversion to meters - in the R curve formula to calculate the radius of curvature for both the left and right lane lines.
+The radius of curvature is calculated using the `measure_curvature()` function, lines 538-564. This function assumes that the coefficients given for the left and right lane polynomials are calculated from coordinates that were converted from pixels to meters. The y value corresponding to the bottom of the image is used - after conversion to meters - in the R curve formula to calculate the radius of curvature for both the left and right lane lines.
 
-The offset from lane center is calculated in the `process_test_images()` function (or the `LaneLine.AddFrame()` function, see Note below), lines 714-722. The idea here is to use the "meters" version of the polynomial coefficients to calculate the x position of each lane line for the bottom of the image and then calculate the distance to the center of the image (assume to be the center of the vehicle). The two distances are averaged and the result becomes the offset from center for the vehicle.
+The offset from lane center is calculated in the `AdvancedLaneLines.ProcessTestImages()` function (or the `LaneLine.AddFrame()` function on lines 89-126, see Note below), lines 841-914. The idea here is to use the "meters" version of the polynomial coefficients to calculate the x position of each lane line for the bottom of the image and then calculate the distance to the center of the image (assume to be the center of the vehicle). The two distances are averaged and the result becomes the offset from center for the vehicle.
 
 #### 6. Provide an example image of your result plotted back down onto the road such that the lane area is identified clearly.
 
@@ -114,7 +114,7 @@ The radius of curvature for both the left and right lane lines, as well as the o
 
 ---
 Note:
-The code described above was used to process the test images in the "./test_images" folder. Much of it was replicated in the LaneLine class, lines 61-128. The `LaneLine.AddFrame()` function was used when processing image frames from the test video. The code is essentially the same as that described above but I did not feel it necessary to include a detailed description of this version of the code.
+The code described above was used to process the test images in the "./test_images" folder. There is some duplication of code between the `AdvancedLaneLines.FindLaneLines()` method, lines 704-798, which uses the `LaneLines.AddFrame()` method, lines 89-126, and the `AdvancedLaneLines.ProcessTestImages()` method, lines 841-914. However the code is essentially the same in both cases.
 ---
 
 ### Pipeline (video)
@@ -127,8 +127,10 @@ Here's a [link to my video result](./project_video_lanes.mp4)
 
 ### Discussion
 
-The results of applying my code to the project video seemed to turn out OK with the exception of a few frames around the last curve (to the right) where a shadow from a tree falls across the lane just as the lane is beginning to curve. For about 10 frames or so the lane line finding process becomes confused and seems to end up swapping the left and right lane lines. I tried extracting a few frames from the input video and processed them separately and the code seemed to work in that case. Which leads me to believe that there may be some issue with the code in the `LaneLine.AddFrame()` function that attempts to smooth the transition from one frame to the next by averaging the most recent N lane line fits. More work is needed in this area. For now, time to move on.
+After my initial project submission there were two areas in the output video that needed addressing. The first was just an initialization issue with the first few frames and was easily resolved. The second was a problem with a few frames around the last curve (to the right) where a shadow from a tree falls across the lane just as the lane is beginning to curve. The lane lines became quite confused for a short bit here in the initial implementation. To resolve this I changed the color threshold code (see description above) and this seems to have resolved the issue for the project video (I have not tried either of the challenge videos due to lack of time).
 
-The values I used for the color and gradient thresholds were obtained via trial and error. A very little bit of trial and error and then only with reference to the very small test of test images in the "./test_images" directory. While the resulting values seemed to have worked well enough for the project video I have not tested the process against either one of the challenge videos and, in general, I feel that more effort could go into refining these values. Perhaps even a neural network of some type.
+I have not implemented any sort of sanity checks with respect to lane curvature radii or polynomial fit coefficients or any other potential checks. I believe this is a necessary step for the more difficult videos and, needless to say, real world conditions. For now the smoothing that happens in the `LaneLine.AddFrame()` method will have to suffice.
+
+The values I used for the color and gradient thresholds were obtained via trial and error. A very little bit of trial and error and then only with reference to the very small test of test images in the "./test_images" directory and also a few frames around the problem area discovered in the initial implementation. While the resulting values seemed to have worked well enough for the project video I have not tested the process against either one of the challenge videos and, in general, I feel that more effort could go into refining these values. Perhaps even a neural network of some type.
 
 Similarly with the constants (number of windows, margin size, minimum pixel size) used for finding lane line pixels. The default values seemed to work well enough for the project video but the real world is a complicated place.
