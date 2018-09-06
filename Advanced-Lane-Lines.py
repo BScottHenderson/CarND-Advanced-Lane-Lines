@@ -32,8 +32,8 @@ WRITE_OUTPUT_FRAMES = True
 #
 
 # Color and gradient thresholds.
-COLOR_THRESHOLD = (170, 250)
-GRADIENT_THRESHOLD = (65, 100)
+COLOR_THRESHOLD = (170, 250)  # (150, 230)
+GRADIENT_THRESHOLD = (65, 100)      #(65, 130)
 
 # Number of sliding windows used to find lane lines.
 LANE_LINES_NWINDOWS = 9
@@ -87,10 +87,6 @@ class LaneLine():
         self.line_base_pos = None
         # difference in fit coefficients between last and new fits
         self.diffs = np.array([0, 0, 0], dtype='float')
-        # x values for detected line pixels
-        self.allx = None
-        # y values for detected line pixels
-        self.ally = None
 
     def AddFrame(self, img, lane_x, lane_y):
         # Fit a second order polynomial to each lane line.
@@ -102,34 +98,36 @@ class LaneLine():
         fit = np.polyfit(lane_y, lane_x, 2)
         fit_m = np.polyfit(lane_y * YM_PER_PIX, lane_x * XM_PER_PIX, 2)
 
-        # Generate x and y values for fitting.
-        fity = np.linspace(0, img.shape[0] - 1, img.shape[0])
-        fitx = fit[0] * fity**2 + fit[1] * fity + fit[2]
+        # Calc difference between current fit and best fit.
+        if self.best_fit is not None:
+            self.diffs = abs(fit - self.best_fit)
 
-        # Define y-value where we want radius of curvature.
-        # Use the maximum y-value, corresponding to the bottom of the image.
-        y_eval = np.max(fity)
+        if (self.diffs[0] < 0.001 and self.diffs[1] < 1.0 and self.diffs[2] < 100.):
 
-        # Implement the calculation of R_curve (radius of curvature)
-        y_eval *= YM_PER_PIX  # convert y value from pixels to meters
-        self.radius_of_curvature = np.power((1 + np.square(2 * fit_m[0] * y_eval + fit_m[1])), 1.5) / np.abs(2 * fit_m[0])
+            # Generate x and y values for fitting.
+            fity = np.linspace(0, img.shape[0] - 1, img.shape[0])
+#            fitx = fit[0] * fity**2 + fit[1] * fity + fit[2]
 
-        # Calculate offset from image center.
-        x = fit_m[0] * y_eval**2 + fit_m[1] * y_eval + fit_m[2]
-        img_center = (img.shape[1] / 2.) * XM_PER_PIX
-        self.line_base_pos = img_center - x
+            # Define y-value where we want radius of curvature.
+            # Use the maximum y-value, corresponding to the bottom of the image.
+            y_eval = np.max(fity)
 
-        self.allx = fitx
-        self.ally = fity
+            # Implement the calculation of R_curve (radius of curvature)
+            y_eval *= YM_PER_PIX  # convert y value from pixels to meters
+            self.radius_of_curvature = np.power((1 + np.square(2 * fit_m[0] * y_eval + fit_m[1])), 1.5) / np.abs(2 * fit_m[0])
 
-        self.current_fit.append(fit)
-        # Keep only the most recent FRAME_HISTORY_COUNT frames.
-        if len(self.current_fit) > FRAME_HISTORY_COUNT:
-            self.current_fit = self.current_fit[len(self.current_fit) - FRAME_HISTORY_COUNT:]
+            # Calculate offset from image center.
+            x = fit_m[0] * y_eval**2 + fit_m[1] * y_eval + fit_m[2]
+            img_center = (img.shape[1] / 2.) * XM_PER_PIX
+            self.line_base_pos = img_center - x
 
-        self.best_fit = np.average(self.current_fit, axis=0)
+            self.current_fit.append(fit)
+            # Keep only the most recent FRAME_HISTORY_COUNT frames.
+            if len(self.current_fit) > FRAME_HISTORY_COUNT:
+                self.current_fit = self.current_fit[len(self.current_fit) - FRAME_HISTORY_COUNT:]
 
-        self.diffs = abs(fit - self.best_fit)
+            self.best_fit = np.average(self.current_fit, axis=0)
+
 
 
 #
@@ -674,7 +672,7 @@ class AdvancedLaneLines():
         self.video_dir = video_dir
 
         # Open the video file.
-        input_clip = VideoFileClip(input_file).subclip(41, 43)
+        input_clip = VideoFileClip(input_file)  # .subclip(41, 43)
 
         # For each frame in the video clip, replace the frame image with the
         # result of applying the 'FindLaneLines' function.
@@ -753,6 +751,8 @@ class AdvancedLaneLines():
 
             self.left.AddFrame(warped, leftx, lefty)
             self.right.AddFrame(warped, rightx, righty)
+
+
 
             filled_lane = self.DrawLaneLine(img, img_size, warped, self.left.best_fit, self.right.best_fit)
 
@@ -917,7 +917,7 @@ def main(name):
     if PROCESS_TEST_IMAGES:
         proc.ProcessTestImages('./test_images', './output_images')
     if PROCESS_TEST_FRAMES:
-        proc.ProcessTestImages('./test_frames', './test_frames')
+        proc.ProcessTestImages('./test_frames', './test_frames_output')
     if PROCESS_VIDEO_FILE:
         video_dir = None
         if WRITE_OUTPUT_FRAMES:
