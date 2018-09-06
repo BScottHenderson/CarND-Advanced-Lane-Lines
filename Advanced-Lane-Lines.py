@@ -32,7 +32,7 @@ WRITE_OUTPUT_FRAMES = True
 #
 
 # Color and gradient thresholds.
-COLOR_THRESHOLD = (170, 250)  # (150, 230)
+COLOR_THRESHOLD = (170, 250) # (170, 250)  # (150, 230)
 GRADIENT_THRESHOLD = (65, 100)      #(65, 130)
 
 # Number of sliding windows used to find lane lines.
@@ -73,8 +73,6 @@ class LaneLine():
     def __init__(self):
         # was the line detected in the last iteration?
         self.detected = False
-        # x values of the last n fits of the line
-        self.recent_xfitted = []
         # average x values of the fitted line over the last n iterations
         self.bestx = None
         # polynomial coefficients averaged over the last n iterations
@@ -98,36 +96,34 @@ class LaneLine():
         fit = np.polyfit(lane_y, lane_x, 2)
         fit_m = np.polyfit(lane_y * YM_PER_PIX, lane_x * XM_PER_PIX, 2)
 
-        # Calc difference between current fit and best fit.
+
+        # Generate x and y values for fitting.
+        fity = np.linspace(0, img.shape[0] - 1, img.shape[0])
+#            fitx = fit[0] * fity**2 + fit[1] * fity + fit[2]
+
+        # Define y-value where we want radius of curvature.
+        # Use the maximum y-value, corresponding to the bottom of the image.
+        y_eval = np.max(fity)
+
+        # Implement the calculation of R_curve (radius of curvature)
+        y_eval *= YM_PER_PIX  # convert y value from pixels to meters
+        self.radius_of_curvature = np.power((1 + np.square(2 * fit_m[0] * y_eval + fit_m[1])), 1.5) / np.abs(2 * fit_m[0])
+
+        # Calculate offset from image center.
+        x = fit_m[0] * y_eval**2 + fit_m[1] * y_eval + fit_m[2]
+        img_center = (img.shape[1] / 2.) * XM_PER_PIX
+        self.line_base_pos = img_center - x
+
+        self.current_fit.append(fit)
+        # Keep only the most recent FRAME_HISTORY_COUNT frames.
+        if len(self.current_fit) > FRAME_HISTORY_COUNT:
+            self.current_fit = self.current_fit[len(self.current_fit) - FRAME_HISTORY_COUNT:]
+
+        # Use 'diffs' for sanity checking?
         if self.best_fit is not None:
             self.diffs = abs(fit - self.best_fit)
 
-        if (self.diffs[0] < 0.001 and self.diffs[1] < 1.0 and self.diffs[2] < 100.):
-
-            # Generate x and y values for fitting.
-            fity = np.linspace(0, img.shape[0] - 1, img.shape[0])
-#            fitx = fit[0] * fity**2 + fit[1] * fity + fit[2]
-
-            # Define y-value where we want radius of curvature.
-            # Use the maximum y-value, corresponding to the bottom of the image.
-            y_eval = np.max(fity)
-
-            # Implement the calculation of R_curve (radius of curvature)
-            y_eval *= YM_PER_PIX  # convert y value from pixels to meters
-            self.radius_of_curvature = np.power((1 + np.square(2 * fit_m[0] * y_eval + fit_m[1])), 1.5) / np.abs(2 * fit_m[0])
-
-            # Calculate offset from image center.
-            x = fit_m[0] * y_eval**2 + fit_m[1] * y_eval + fit_m[2]
-            img_center = (img.shape[1] / 2.) * XM_PER_PIX
-            self.line_base_pos = img_center - x
-
-            self.current_fit.append(fit)
-            # Keep only the most recent FRAME_HISTORY_COUNT frames.
-            if len(self.current_fit) > FRAME_HISTORY_COUNT:
-                self.current_fit = self.current_fit[len(self.current_fit) - FRAME_HISTORY_COUNT:]
-
-            self.best_fit = np.average(self.current_fit, axis=0)
-
+        self.best_fit = np.average(self.current_fit, axis=0)
 
 
 #
@@ -294,8 +290,9 @@ def color_gradient_threshold(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
     Apply a color threshold and a gradient threshold to the given image.
 
     Args:
-        s_thresh: Color threshold (apply to S channel)
-        sx_thresh: Gradient threshold (apply to x gradient on L channel)
+        img: apply thresholds to this image
+        s_thresh: Color threshold (apply to S channel of HSV)
+        sx_thresh: Gradient threshold (apply to x gradient on L channel of HSV)
 
     Returns:
         new image with thresholds applied
@@ -307,10 +304,16 @@ def color_gradient_threshold(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
     hls = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)
 #    H = hls[:, :, 0]
     L = hls[:, :, 1]
-    S = hls[:, :, 2]
+#    S = hls[:, :, 2]
 
-    # Apply Sobel x to the L channel
-    sobelx = cv2.Sobel(L, cv2.CV_64F, 1, 0)  # Take the derivative in x
+    # Convert to LAB color space and separate the channels.
+    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+#    L = lab[:, :, 0]
+#    A = lab[:, :, 1]
+    B = lab[:, :, 2]
+
+    # Apply Sobel x (take the derivative on the x axis)
+    sobelx = cv2.Sobel(L, cv2.CV_64F, 1, 0)
     # Absolute x derivative to accentuate lines away from horizontal
     abs_sobelx = np.absolute(sobelx)
     scaled_sobel = np.uint8(255 * abs_sobelx / np.max(abs_sobelx))
@@ -320,14 +323,23 @@ def color_gradient_threshold(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
     sxbinary[(scaled_sobel >= sx_thresh[0]) &
              (scaled_sobel <= sx_thresh[1])] = 1
 
-    # Apply color channel threshold
-    s_binary = np.zeros_like(S)
-    s_binary[(S >= s_thresh[0]) & (S <= s_thresh[1])] = 1
+# Apply color channel threshold
+    L = L * (255 / np.max(L))  # normalize
+    L_thresh = np.zeros_like(L)
+    L_thresh[(L > s_thresh[0]) & (L <= s_thresh[1])] = 1    # 220, 255
+    if np.max(B) > 175:
+        # normalize, but only if there is yellow
+        B = B * (255 / np.max(B))
+    B_thresh = np.zeros_like(B)
+    B_thresh[((B > s_thresh[0]) & (B <= s_thresh[1]))] = 1  # 190, 255
+    # Combine HLS and Lab B channel thresholds
+    lb_binary = np.zeros_like(L_thresh)
+    lb_binary[(L_thresh == 1) | (B_thresh == 1)] = 1
 
     # Stack each channel and return.
-    color_binary = np.dstack((np.zeros_like(sxbinary), sxbinary, s_binary))
+    color_binary = np.dstack((np.zeros_like(sxbinary), sxbinary, lb_binary))
     color_binary *= 255  # Convert from [0, 1] back to [0, 255]
-    return color_binary
+    return np.uint8(color_binary)
 
 
 #
@@ -476,14 +488,12 @@ def find_lane_pixels(img):
     return leftx, lefty, rightx, righty, out_img
 
 
-def fit_lane_line_polynomial(img, color_conversion=cv2.COLOR_BGR2GRAY):
+def fit_lane_line_polynomial(img):
     """
     Find lane lines in an image and fit a quadratic polynomial.
 
     Args:
         img: image containing lane line pixels
-        color_conversion: use cv2.COLOR_BGR2GRAY (default) if reading images
-            with OpenCV else use cv2.COLOR_RGB2GRAY
 
     Returns:
         left_fit, right_fit: polynomial coefficients for left and right
@@ -494,7 +504,7 @@ def fit_lane_line_polynomial(img, color_conversion=cv2.COLOR_BGR2GRAY):
     """
 
     # Find lane line pixels.
-    gray = cv2.cvtColor(img, color_conversion)
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     leftx, lefty, rightx, righty, out_img = find_lane_pixels(gray)
 
     # Fit a second order polynomial to each lane line.
@@ -672,7 +682,7 @@ class AdvancedLaneLines():
         self.video_dir = video_dir
 
         # Open the video file.
-        input_clip = VideoFileClip(input_file)  # .subclip(41, 43)
+        input_clip = VideoFileClip(input_file)  # .subclip(40, 44)
 
         # For each frame in the video clip, replace the frame image with the
         # result of applying the 'FindLaneLines' function.
@@ -731,7 +741,7 @@ class AdvancedLaneLines():
             #
 
             # Detect lane lines
-            left_fit, right_fit, left_fit_m, right_fit_m, lane_lines = fit_lane_line_polynomial(warped, cv2.COLOR_RGB2GRAY)
+            left_fit, right_fit, left_fit_m, right_fit_m, lane_lines = fit_lane_line_polynomial(warped)
 
             # Calculate lane line curvature.
             left_curverad_m, right_curverad_m = measure_curvature(warped, left_fit_m, right_fit_m)
@@ -763,11 +773,15 @@ class AdvancedLaneLines():
             cv2.putText(filled_lane, curve_radius, (10, 30),
                         TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
 
-            # Calculate average offset from lane center and write to image.
-            lane_center = (self.left.line_base_pos + self.right.line_base_pos) / 2.
-            offset = 'Offset: {} m'.format(round(lane_center, 1))
-            cv2.putText(filled_lane, offset, (10, 60),
+            diff = 'Radius diff: ({}, {})'.format(self.left.radius_of_curvature_diff, self.right.radius_of_curvature_diff)
+            cv2.putText(filled_lane, diff, (10, 60),
                         TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
+
+#            # Calculate average offset from lane center and write to image.
+#            lane_center = (self.left.line_base_pos + self.right.line_base_pos) / 2.
+#            offset = 'Offset: {} m'.format(round(lane_center, 1))
+#            cv2.putText(filled_lane, offset, (10, 60),
+#                        TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
 
         # Write the frame number to the image.
         frame = 'Frame: {}'.format(self.current_frame)
@@ -852,6 +866,9 @@ class AdvancedLaneLines():
             img = cv2.imread(fname)
             img_size = (img.shape[1], img.shape[0])
 
+            # Convert from BGR to RGB now to avoid problems later.
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
             # Distortion correction
             img = undistort(img, self.C, self.D)
             cv2.imwrite(os.path.join(output_dir, name + '_1_undistort') + ext, img)
@@ -878,7 +895,7 @@ class AdvancedLaneLines():
             cv2.imwrite(os.path.join(output_dir, name + '_3_warped2') + ext, img3)
 
             # Detect lane lines
-            left_fit, right_fit, left_fit_m, right_fit_m, lane_lines = fit_lane_line_polynomial(warped, cv2.COLOR_BGR2GRAY)
+            left_fit, right_fit, left_fit_m, right_fit_m, lane_lines = fit_lane_line_polynomial(warped)
             cv2.imwrite(os.path.join(output_dir, name + '_4_lane_lines') + ext, lane_lines)
 
             # Calculate lane line curvature and write to image.
