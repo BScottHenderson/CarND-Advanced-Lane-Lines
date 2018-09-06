@@ -773,15 +773,11 @@ class AdvancedLaneLines():
             cv2.putText(filled_lane, curve_radius, (10, 30),
                         TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
 
-            diff = 'Radius diff: ({}, {})'.format(self.left.radius_of_curvature_diff, self.right.radius_of_curvature_diff)
-            cv2.putText(filled_lane, diff, (10, 60),
+            # Calculate average offset from lane center and write to image.
+            lane_center = (self.left.line_base_pos + self.right.line_base_pos) / 2.
+            offset = 'Offset: {} m'.format(round(lane_center, 1))
+            cv2.putText(filled_lane, offset, (10, 60),
                         TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
-
-#            # Calculate average offset from lane center and write to image.
-#            lane_center = (self.left.line_base_pos + self.right.line_base_pos) / 2.
-#            offset = 'Offset: {} m'.format(round(lane_center, 1))
-#            cv2.putText(filled_lane, offset, (10, 60),
-#                        TEXT_FONT, TEXT_SCALE, TEXT_COLOR, TEXT_THICKNESS, TEXT_LINE_TYPE)
 
         # Write the frame number to the image.
         frame = 'Frame: {}'.format(self.current_frame)
