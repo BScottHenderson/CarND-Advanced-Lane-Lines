@@ -24,7 +24,7 @@ PROCESS_TEST_IMAGES = False
 PROCESS_TEST_FRAMES = False
 PROCESS_VIDEO_FILE = True
 USE_LANE_LINES_CLASS = True
-WRITE_OUTPUT_FRAMES = True
+WRITE_OUTPUT_FRAMES = False
 
 
 #
@@ -633,7 +633,7 @@ class AdvancedLaneLines():
     6. Determine the lane curvature     FindLaneLines
     """
 
-    def __init__(self):
+    def __init__(self, camera_cal_dir):
         # Camera matrix
         self.C = None
         # Distortion coefficients
@@ -654,7 +654,7 @@ class AdvancedLaneLines():
         # Get the camera matrix (C) and distortion coefficients (D) from
         # the camera calibration images.
         print('Camera calibration ...')
-        self.C, self.D = calibrate_camera('./camera_cal')
+        self.C, self.D = calibrate_camera(camera_cal_dir)
 
     def ProcessVideoClip(self, input_file, video_dir=None):
         """
@@ -926,7 +926,7 @@ def main(name):
     print('Name: {}'.format(name))
     print()
 
-    proc = AdvancedLaneLines()
+    proc = AdvancedLaneLines('./camera_cal')
 
     if PROCESS_TEST_IMAGES:
         proc.ProcessTestImages('./test_images', './output_images')
