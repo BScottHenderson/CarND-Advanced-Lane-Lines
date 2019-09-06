@@ -9,6 +9,8 @@ import sys
 import os
 import glob
 
+import click
+
 import numpy as np
 import cv2
 
@@ -20,11 +22,18 @@ from moviepy.editor import VideoFileClip
 #
 
 UNDISTORT_REFINE_CAMERA_MATRIX = False  # this is not working
-PROCESS_TEST_IMAGES = False
-PROCESS_TEST_FRAMES = False
-PROCESS_VIDEO_FILE = True
 USE_LANE_LINES_CLASS = True
 WRITE_OUTPUT_FRAMES = False
+
+
+#
+# Directories
+#
+
+CAMERA_CALIBRATION_DIR = './camera_cal'
+IMAGE_DIR = './test_images'
+FRAME_DIR = './test_frames'
+VIDEO_DIR = './test_videos'
 
 
 #
@@ -32,8 +41,8 @@ WRITE_OUTPUT_FRAMES = False
 #
 
 # Color and gradient thresholds.
-COLOR_THRESHOLD = (180, 230)    # (170, 250) (150, 230)
-GRADIENT_THRESHOLD = (65, 130)  # (65, 100) (65, 130)
+COLOR_THRESHOLD = [(125, 180), (220, 255)]
+GRADIENT_THRESHOLD = (65, 130)
 
 # Number of sliding windows used to find lane lines.
 LANE_LINES_NWINDOWS = 9
@@ -51,7 +60,7 @@ FRAME_HISTORY_COUNT = 9
 #
 
 # Define conversions in x and y from pixels space to meters
-YM_PER_PIX = 30 / 720  # meters per pixel in y dimension
+YM_PER_PIX = 30. / 720  # meters per pixel in y dimension
 XM_PER_PIX = 3.7 / 700  # meters per pixel in x dimension
 
 # Image text parameters
@@ -99,7 +108,7 @@ class LaneLine():
 
         # Generate x and y values for fitting.
         fity = np.linspace(0, img.shape[0] - 1, img.shape[0])
-#            fitx = fit[0] * fity**2 + fit[1] * fity + fit[2]
+        # fitx = fit[0] * fity**2 + fit[1] * fity + fit[2]
 
         # Define y-value where we want radius of curvature.
         # Use the maximum y-value, corresponding to the bottom of the image.
@@ -190,14 +199,14 @@ def calibrate_camera(image_dir):
             # after the corner position moves by less than epsilon
             imgpoints.append(corners2)
 
-#            # Draw and display the corners
-#            cv2.drawChessboardCorners(img, (nx, ny), corners, ret)
-#            plt.imshow(img)
+            # # Draw and display the corners
+            # cv2.drawChessboardCorners(img, (nx, ny), corners, ret)
+            # plt.imshow(img)
 
-#            # Draw and display the corners
-#            img = cv2.drawChessboardCorners(img, (nx, ny), corners2, ret)
-#            cv2.imshow('img', img)
-#            cv2.waitKey(500)
+            # # Draw and display the corners
+            # img = cv2.drawChessboardCorners(img, (nx, ny), corners2, ret)
+            # cv2.imshow('img', img)
+            # cv2.waitKey(500)
         else:
             # For some of the test images there are only 5 corners in the y
             # direction instead of 6 so findChessboardCorners() does not find
@@ -205,8 +214,9 @@ def calibrate_camera(image_dir):
             # not work but this causes problems downstream that I am not sure
             # how to deal with. So just ignore these calibration images.
             print('No corners found for {}'.format(fname))
-#
-#    cv2.destroyAllWindows()
+
+    # cv2.destroyAllWindows()
+
 
     #
     # Camera calibration
@@ -285,14 +295,14 @@ def undistort(img, C, D):
 # Apply color and gradient thresholds to an image.
 #
 
-def color_gradient_threshold(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
+def color_gradient_threshold(img, s_thresh=[(170, 255),(170, 255)], sx_thresh=(20, 100)):
     """
     Apply a color threshold and a gradient threshold to the given image.
 
     Args:
         img: apply thresholds to this image
-        s_thresh: Color threshold (apply to S channel of HSV)
-        sx_thresh: Gradient threshold (apply to x gradient on L channel of HSV)
+        s_thresh: Color threshold (apply to S channel of HLS and B channel of LAB)
+        sx_thresh: Gradient threshold (apply to x gradient on L channel of HLS)
 
     Returns:
         new image with thresholds applied
@@ -302,19 +312,19 @@ def color_gradient_threshold(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
 
     # Convert to HLS color space and separate the channels.
     hls = cv2.cvtColor(img, cv2.COLOR_BGR2HLS)
-#    H = hls[:, :, 0]
+    # H = hls[:, :, 0]
     L = hls[:, :, 1]
-#    S = hls[:, :, 2]
+    S = hls[:, :, 2]
 
     # Convert to LAB color space and separate the channels.
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-#    L = lab[:, :, 0]
-#    A = lab[:, :, 1]
+    # L = lab[:, :, 0]
+    # A = lab[:, :, 1]
     B = lab[:, :, 2]
 
-    # Apply Sobel x (take the derivative on the x axis)
+    # Apply Sobel x (take the derivative on the x axis) to the HLS L channel.
     sobelx = cv2.Sobel(L, cv2.CV_64F, 1, 0)
-    # Absolute x derivative to accentuate lines away from horizontal
+    # Absolute x derivative to accentuate lines away from horizontal.
     abs_sobelx = np.absolute(sobelx)
     scaled_sobel = np.uint8(255 * abs_sobelx / np.max(abs_sobelx))
 
@@ -323,19 +333,24 @@ def color_gradient_threshold(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
     sxbinary[(scaled_sobel >= sx_thresh[0]) &
              (scaled_sobel <= sx_thresh[1])] = 1
 
-    # Apply color channel threshold
-    L = L * (255 / np.max(L))  # normalize
-    L_thresh = np.zeros_like(L)
-    L_thresh[(L > s_thresh[0]) & (L <= s_thresh[1])] = 1
+    # Apply color channel threshold.
+    s_thresh = (125, 180)
+    S = S * (255 / np.max(S))  # normalize
+    S_thresh = np.zeros_like(S)
+    S_thresh[(S > s_thresh[0]) & (S <= s_thresh[1])] = 1
+
+    s_thresh = (220, 255)
     B = B * (255 / np.max(B))  # normalize
     B_thresh = np.zeros_like(B)
-    B_thresh[((B > s_thresh[0]) & (B <= s_thresh[1]))] = 1
-    # Combine HLS and Lab B channel thresholds
-    lb_binary = np.zeros_like(L_thresh)
-    lb_binary[(L_thresh == 1) | (B_thresh == 1)] = 1
+    B_thresh[(B > s_thresh[0]) & (B <= s_thresh[1])] = 1
+
+    # Combine HLS S and Lab B channel thresholds.
+    sb_binary = np.zeros_like(S_thresh)
+    sb_binary[(S_thresh == 1) | (B_thresh == 1)] = 1
 
     # Stack each channel and return.
-    color_binary = np.dstack((np.zeros_like(sxbinary), sxbinary, lb_binary))
+    #                         B                        G         R
+    color_binary = np.dstack((np.zeros_like(sxbinary), sxbinary, sb_binary))
     color_binary *= 255  # Convert from [0, 1] back to [0, 255]
     return np.uint8(color_binary)
 
@@ -607,7 +622,7 @@ def draw_lines(img, pts, color=(0, 0, 255), thick=2, closed=True):
         else:
             pt1 = pt2
             pt2 = p
-#            print('{} - {}'.format(pt1, pt2))
+            # print('{} - {}'.format(pt1, pt2))
             cv2.line(img, pt1, pt2, color, thick)
     if closed:
         cv2.line(img, pt2, first, color, thick)
@@ -656,7 +671,7 @@ class AdvancedLaneLines():
         print('Camera calibration ...')
         self.C, self.D = calibrate_camera(camera_cal_dir)
 
-    def ProcessVideoClip(self, input_file, video_dir=None):
+    def ProcessVideoClip(self, input_file):
         """
         Apply the FindLaneLines() function to each frame in a given video file.
         Save the results to a new video file in the same location using the
@@ -664,7 +679,6 @@ class AdvancedLaneLines():
 
         Args:
             input_file (str): Process this video file.
-            video_dir (str): Optional location for modified video frames.
 
         Returns:
             none
@@ -677,7 +691,9 @@ class AdvancedLaneLines():
         to the end of the line below, where start_second and end_second are
         integer values representing the start and end of the subclip.
         """
-        self.video_dir = video_dir
+        file_name, ext = os.path.splitext(input_file)
+        # Optional location for modified video frames.
+        self.video_dir = file_name + '_lanes' if WRITE_OUTPUT_FRAMES else None
 
         # Open the video file.
         input_clip = VideoFileClip(input_file)  # .subclip(40, 45)
@@ -689,7 +705,6 @@ class AdvancedLaneLines():
         output_clip = input_clip.fl(self.FindLaneLines)
 
         # Save the resulting, modified, video clip to a file.
-        file_name, ext = os.path.splitext(input_file)
         output_file = file_name + '_lanes' + ext
         output_clip.write_videofile(output_file, audio=False)
 
@@ -719,8 +734,7 @@ class AdvancedLaneLines():
         img = get_frame(t)
         img_size = (img.shape[1], img.shape[0])
 
-        # Convert from RGB to BGR since this seems to work best for cv2
-        # functions.
+        # Convert from RGB to BGR since this seems to work best for cv2 functions.
         img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
         # Distortion correction
@@ -733,7 +747,8 @@ class AdvancedLaneLines():
 
         # Perspective transformation
         if self.M is None or UNDISTORT_REFINE_CAMERA_MATRIX:
-            self.M, self.Minv, src, dst = perspective_transform_matrix(img_size)
+            # self.M, self.Minv, src, dst = perspective_transform_matrix(img_size)
+            self.M, self.Minv, _, _ = perspective_transform_matrix(img_size)
         warped = cv2.warpPerspective(thresh, self.M, img_size, flags=cv2.INTER_LINEAR)
 
         if not USE_LANE_LINES_CLASS:
@@ -743,10 +758,12 @@ class AdvancedLaneLines():
             #
 
             # Detect lane lines
-            left_fit, right_fit, left_fit_m, right_fit_m, lane_lines = fit_lane_line_polynomial(warped)
+            # left_fit, right_fit, left_fit_m, right_fit_m, lane_lines = fit_lane_line_polynomial(warped)
+            left_fit, right_fit, left_fit_m, right_fit_m, _ = fit_lane_line_polynomial(warped)
 
             # Calculate lane line curvature.
-            left_curverad_m, right_curverad_m = measure_curvature(warped, left_fit_m, right_fit_m)
+            # left_curverad_m, right_curverad_m = measure_curvature(warped, left_fit_m, right_fit_m)
+            measure_curvature(warped, left_fit_m, right_fit_m)
 
             # Draw filled lane polygon.
             filled_lane = self.DrawLaneLine(img, img_size, warped, left_fit, right_fit)
@@ -820,7 +837,7 @@ class AdvancedLaneLines():
         # Create an image to draw the lines on.
         warp_zero = np.zeros_like(warped).astype(np.uint8)
         # Our input image is already color so this step is not necessary.
-#        color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
+        # color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
 
         # Calculate points for each lane line using quadratic equation.
         ploty = np.linspace(0, warped.shape[0] - 1, warped.shape[0])
@@ -921,23 +938,25 @@ class AdvancedLaneLines():
 # Main
 #
 
-def main(name):
+@click.command()
+@click.option('--test-images', '-i', is_flag=True, default=False)
+@click.option('--test-frames', '-f', is_flag=True, default=False)
+@click.option('--test-video', '-v', is_flag=True, default=False)
+def main(test_images=None, test_frames=None, test_video=None):
 
-    print('Name: {}'.format(name))
-    print()
+    print('Name: {}\n'.format(__file__))
 
-    proc = AdvancedLaneLines('./camera_cal')
+    proc = AdvancedLaneLines(CAMERA_CALIBRATION_DIR)
 
-    if PROCESS_TEST_IMAGES:
-        proc.ProcessTestImages('./test_images', './output_images')
-    if PROCESS_TEST_FRAMES:
-        proc.ProcessTestImages('./test_frames', './test_frames_output')
-    if PROCESS_VIDEO_FILE:
-        video_dir = None
-        if WRITE_OUTPUT_FRAMES:
-            video_dir = './project_video_lanes'
-        proc.ProcessVideoClip('./project_video.mp4', video_dir)
+    if test_images:
+        proc.ProcessTestImages(IMAGE_DIR, IMAGE_DIR + '_output')
+    if test_frames:
+        proc.ProcessTestImages(FRAME_DIR, FRAME_DIR + '_output')
+    if test_video:
+        proc.ProcessVideoClip(os.path.join(VIDEO_DIR, 'project_video.mp4'))
+        # proc.ProcessVideoClip(os.path.join(VIDEO_DIR, 'challenge_video.mp4'))
+        # proc.ProcessVideoClip(os.path.join(VIDEO_DIR, 'harder_challenge_video.mp4'))
 
 
 if __name__ == '__main__':
-    main(*sys.argv)
+    main()
